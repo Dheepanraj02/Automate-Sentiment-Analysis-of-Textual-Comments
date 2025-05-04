@@ -1,0 +1,263 @@
+# Import required libraries
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import re
+import nltk
+from nltk.corpus import stopwords
+from nltk.stem import WordNetLemmatizer
+from nltk.tokenize import word_tokenize
+from textblob import TextBlob
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Embedding, SimpleRNN, LSTM, Dense, Dropout, Bidirectional
+from tensorflow.keras.callbacks import EarlyStopping
+
+# Download NLTK resources
+nltk.download('punkt')
+nltk.download('stopwords')
+nltk.download('wordnet')
+
+# Load datasets (example - replace with your actual data files)
+try:
+    df1 = pd.read_csv('tweets1.csv')
+    df2 = pd.read_csv('tweets2.csv')
+    df = pd.concat([df1, df2], axis=0)
+except FileNotFoundError:
+    # Create sample data if files not found
+    data = {
+        'text': [
+            "I love this product! It's amazing.",
+            "This is terrible. Worst experience ever.",
+            "It's okay, nothing special.",
+            "The service was excellent and fast.",
+            "I'm very disappointed with the quality."
+        ],
+        'sentiment': ['positive', 'negative', 'neutral', 'positive', 'negative']
+    }
+    df = pd.DataFrame(data)
+
+# Data Preprocessing
+def clean_text(text):
+    # Remove HTML tags
+    text = re.sub(r'<.*?>', '', text)
+    # Remove URLs
+    text = re.sub(r'http\S+|www\S+|https\S+', '', text, flags=re.MULTILINE)
+    # Remove user @ references and '#' from tweet
+    text = re.sub(r'\@\w+|\#', '', text)
+    # Remove special characters and numbers
+    text = re.sub(r'[^a-zA-Z\s]', '', text)
+    # Convert to lowercase
+    text = text.lower()
+    # Remove extra whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+df['cleaned_text'] = df['text'].apply(clean_text)
+
+# Text Processing
+stop_words = set(stopwords.words('english'))
+lemmatizer = WordNetLemmatizer()
+
+def process_text(text):
+    # Tokenize
+    tokens = word_tokenize(text)
+    # Remove stopwords and lemmatize
+    processed_tokens = [lemmatizer.lemmatize(word) for word in tokens if word not in stop_words]
+    return ' '.join(processed_tokens)
+
+df['processed_text'] = df['cleaned_text'].apply(process_text)
+
+# Sentiment Analysis with TextBlob for EDA
+def get_sentiment(text):
+    analysis = TextBlob(text)
+    if analysis.sentiment.polarity > 0:
+        return 'positive'
+    elif analysis.sentiment.polarity < 0:
+        return 'negative'
+    else:
+        return 'neutral'
+
+df['textblob_sentiment'] = df['processed_text'].apply(get_sentiment)
+
+# EDA - Exploratory Data Analysis
+plt.figure(figsize=(12, 6))
+
+# Original sentiment distribution
+plt.subplot(1, 2, 1)
+sns.countplot(x='sentiment', data=df)
+plt.title('Original Sentiment Distribution')
+
+# TextBlob sentiment distribution
+plt.subplot(1, 2, 2)
+sns.countplot(x='textblob_sentiment', data=df)
+plt.title('TextBlob Sentiment Distribution')
+
+plt.tight_layout()
+plt.show()
+
+# Word cloud for positive and negative words
+from wordcloud import WordCloud
+
+positive_text = ' '.join(df[df['sentiment'] == 'positive']['processed_text'])
+negative_text = ' '.join(df[df['sentiment'] == 'negative']['processed_text'])
+
+plt.figure(figsize=(12, 6))
+
+plt.subplot(1, 2, 1)
+wordcloud = WordCloud(width=800, height=400).generate(positive_text)
+plt.imshow(wordcloud, interpolation='bilinear')
+plt.title('Positive Words')
+plt.axis('off')
+
+plt.subplot(1, 2, 2)
+wordcloud = WordCloud(width=800, height=400).generate(negative_text)
+plt.imshow(wordcloud, interpolation='bilinear')
+plt.title('Negative Words')
+plt.axis('off')
+
+plt.tight_layout()
+plt.show()
+
+# Prepare data for deep learning
+# Convert sentiment labels to numerical values
+sentiment_mapping = {'negative': 0, 'neutral': 1, 'positive': 2}
+df['sentiment_label'] = df['sentiment'].map(sentiment_mapping)
+
+# Tokenization and padding
+max_words = 10000
+max_len = 100
+
+tokenizer = Tokenizer(num_words=max_words)
+tokenizer.fit_on_texts(df['processed_text'])
+sequences = tokenizer.texts_to_sequences(df['processed_text'])
+padded_sequences = pad_sequences(sequences, maxlen=max_len)
+
+# Split data into train and test sets
+X = padded_sequences
+y = pd.get_dummies(df['sentiment_label']).values
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Build RNN model
+rnn_model = Sequential([
+    Embedding(input_dim=max_words, output_dim=128, input_length=max_len),
+    SimpleRNN(64, return_sequences=True),
+    SimpleRNN(32),
+    Dense(64, activation='relu'),
+    Dropout(0.5),
+    Dense(3, activation='softmax')
+])
+
+rnn_model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+print(rnn_model.summary())
+
+# Train RNN model
+rnn_history = rnn_model.fit(
+    X_train, y_train,
+    epochs=10,
+    batch_size=32,
+    validation_split=0.1,
+    callbacks=[EarlyStopping(monitor='val_loss', patience=3)]
+)
+
+# Build LSTM model
+lstm_model = Sequential([
+    Embedding(input_dim=max_words, output_dim=128, input_length=max_len),
+    Bidirectional(LSTM(64, return_sequences=True)),
+    Bidirectional(LSTM(32)),
+    Dense(64, activation='relu'),
+    Dropout(0.5),
+    Dense(3, activation='softmax')
+])
+
+lstm_model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+print(lstm_model.summary())
+
+# Train LSTM model
+lstm_history = lstm_model.fit(
+    X_train, y_train,
+    epochs=10,
+    batch_size=32,
+    validation_split=0.1,
+    callbacks=[EarlyStopping(monitor='val_loss', patience=3)]
+)
+
+# Evaluate models
+def evaluate_model(model, X_test, y_test):
+    y_pred = model.predict(X_test)
+    y_pred_classes = np.argmax(y_pred, axis=1)
+    y_test_classes = np.argmax(y_test, axis=1)
+    
+    print("Accuracy:", accuracy_score(y_test_classes, y_pred_classes))
+    print("\nClassification Report:")
+    print(classification_report(y_test_classes, y_pred_classes, target_names=sentiment_mapping.keys()))
+    print("\nConfusion Matrix:")
+    print(confusion_matrix(y_test_classes, y_pred_classes))
+
+print("RNN Model Evaluation:")
+evaluate_model(rnn_model, X_test, y_test)
+
+print("\nLSTM Model Evaluation:")
+evaluate_model(lstm_model, X_test, y_test)
+
+# Plot training history
+def plot_history(history, title):
+    plt.figure(figsize=(12, 4))
+    
+    plt.subplot(1, 2, 1)
+    plt.plot(history.history['accuracy'])
+    plt.plot(history.history['val_accuracy'])
+    plt.title(f'{title} Accuracy')
+    plt.ylabel('Accuracy')
+    plt.xlabel('Epoch')
+    plt.legend(['Train', 'Validation'], loc='upper left')
+    
+    plt.subplot(1, 2, 2)
+    plt.plot(history.history['loss'])
+    plt.plot(history.history['val_loss'])
+    plt.title(f'{title} Loss')
+    plt.ylabel('Loss')
+    plt.xlabel('Epoch')
+    plt.legend(['Train', 'Validation'], loc='upper left')
+    
+    plt.tight_layout()
+    plt.show()
+
+plot_history(rnn_history, 'RNN')
+plot_history(lstm_history, 'LSTM')
+
+# Save models and tokenizer
+import pickle
+
+rnn_model.save('sentiment_rnn.h5')
+lstm_model.save('sentiment_lstm.h5')
+
+with open('tokenizer.pickle', 'wb') as handle:
+    pickle.dump(tokenizer, handle, protocol=pickle.HIGHEST_PROTOCOL)
+
+# Function to predict sentiment of new text
+def predict_sentiment(text):
+    # Preprocess text
+    cleaned_text = clean_text(text)
+    processed_text = process_text(cleaned_text)
+    
+    # Tokenize and pad
+    sequence = tokenizer.texts_to_sequences([processed_text])
+    padded_sequence = pad_sequences(sequence, maxlen=max_len)
+    
+    # Predict
+    prediction = lstm_model.predict(padded_sequence)
+    predicted_class = np.argmax(prediction)
+    
+    # Map back to sentiment
+    inverse_mapping = {v: k for k, v in sentiment_mapping.items()}
+    return inverse_mapping[predicted_class]
+
+# Test prediction
+test_text = "This product exceeded all my expectations. Highly recommended!"
+print(f"Text: {test_text}")
+print(f"Predicted Sentiment: {predict_sentiment(test_text)}")
